@@ -1,59 +1,74 @@
-# FinSafe Idempotency Gateway
-### The "Pay-Once" Protocol
+# FinSafe Idempotency Gateway – The "Pay-Once" Protocol
 
-A concurrency-safe payment idempotency gateway built with **Python and FastAPI**.
-
-FinSafe prevents duplicate payment execution when clients retry requests or submit multiple requests concurrently. It uses unique idempotency keys, SHA-256 request fingerprints, asynchronous concurrency control, and cached responses to ensure that matching requests reuse the original payment result.
+A concurrency-safe REST API that prevents duplicate payment processing through idempotency keys, request fingerprinting, and response caching.
 
 ---
 
 ## 1. Project Overview
 
-Payment systems must handle situations where a client submits a payment request but does not receive a response because of a network interruption, timeout, or temporary service failure.
+FinSafe Idempotency Gateway is a backend service designed to prevent customers from being charged multiple times when payment requests are accidentally retried.
 
-The client may retry the request without knowing whether the original payment was processed.
+In payment systems, network timeouts can leave clients uncertain about whether a transaction was successful. A client may resend the same request, causing the payment processor to execute the transaction more than once.
 
-Without idempotency protection, the same payment could be executed more than once.
+This project implements an idempotency layer that ensures repeated requests with the same idempotency key and request payload do not trigger duplicate payment processing.
 
-FinSafe introduces an idempotency layer between the client and payment processing logic. It identifies repeated requests and ensures that a matching request does not execute the payment operation again.
+The gateway provides:
 
-The current implementation simulates payment processing and demonstrates how an idempotency mechanism can be implemented in an asynchronous API.
+- Idempotency key validation.
+- Request fingerprinting using SHA-256.
+- Duplicate request detection.
+- Cached response replay.
+- Concurrent request coordination.
+- Idempotency conflict detection.
+- Automatic expiration of completed idempotency records.
+- Centralized exception handling.
+
+**Core principle:** The same idempotency key and the same request payload should produce the same payment result without executing the payment operation again.
+
+---
 
 ## 2. Problem Statement
 
-Payment APIs are vulnerable to duplicate requests caused by:
+Imagine an online customer making a payment of 100 GHS.
 
-- Network interruptions and timeouts.
-- Automatic client retries.
-- Users submitting payment forms multiple times.
-- Multiple requests arriving simultaneously.
-- Uncertain responses after payment execution.
+1. The client sends a payment request.
+2. The server starts processing the payment.
+3. The network experiences a timeout.
+4. The client assumes the request failed and retries.
+5. Without idempotency protection, the server may process the payment again.
 
-For example:
+This can result in duplicate charges, financial losses, and reduced customer trust.
 
-A client submits a payment of 250 GHS using the idempotency key `payment_001`.
+FinSafe needs a mechanism that recognizes repeated payment attempts and returns the original transaction result instead of processing the payment again.
 
-The payment is processed successfully, but the client does not receive the response because of a network interruption.
+### Proposed Solution
 
-The client retries the same request using `payment_001`.
+The gateway requires clients to provide a unique `Idempotency-Key` HTTP header.
 
-Without idempotency protection, the payment could be processed again.
+The gateway stores a fingerprint of the request payload alongside the key.
 
-FinSafe addresses this problem by associating each idempotency key with a fingerprint of the original request and storing the result of successful processing.
+When another request arrives:
+
+- A new key starts payment processing.
+- An existing key with the same payload returns the stored response.
+- An existing key with a different payload is rejected.
+- An identical request arriving while the original is processing waits for the original operation to finish.
+
+---
 
 ## 3. Project Objectives
 
-The project aims to:
+The main objectives are to:
 
-1. Prevent duplicate payment execution.
-2. Support safe retries using idempotency keys.
-3. Handle concurrent requests using the same key.
-4. Detect when an idempotency key is reused with a different request payload.
-5. Store and replay completed payment responses.
-6. Implement a 24-hour expiration period for completed records.
-7. Separate routing, business logic, exception handling, and storage responsibilities.
-8. Provide clear HTTP responses for invalid and conflicting requests.
-9. Demonstrate asynchronous request coordination using Python's `asyncio`.
+1. Build a RESTful payment-processing API using FastAPI.
+2. Prevent duplicate payment execution.
+3. Detect when an idempotency key is reused with a different request payload.
+4. Handle simultaneous requests without race conditions.
+5. Return cached responses for completed requests.
+6. Implement expiration for completed idempotency records.
+7. Maintain a clean separation between API routes, business logic, storage, and exception handling.
+
+---
 
 ## 4. Technology Stack
 
@@ -61,585 +76,543 @@ The project aims to:
 |---|---|
 | Python 3.10 | Backend programming language |
 | FastAPI | REST API framework |
-| Pydantic v2 | Request validation and response schemas |
-| asyncio | Asynchronous execution and concurrency coordination |
+| Pydantic | Request validation and response schemas |
+| asyncio | Asynchronous payment processing and concurrency coordination |
 | SHA-256 | Request fingerprint generation |
-| In-memory dictionary | Idempotency record storage |
-| asyncio.Lock | Atomic coordination of storage operations |
-| asyncio.Event | Notification of waiting concurrent requests |
+| In-memory Dictionary | Idempotency record storage |
+| asyncio.Lock | Atomic access to shared in-memory records |
+| asyncio.Event | Coordination between simultaneous requests |
 | pytest | Automated testing |
-| pytest-asyncio | Asynchronous testing |
+| pytest-asyncio | Asynchronous test execution |
 | HTTPX | API endpoint testing |
 | Uvicorn | ASGI application server |
 | Vercel | Deployment platform |
 
+---
+
 ## 5. System Architecture
 
-FinSafe follows a layered architecture to separate HTTP communication, business logic, exception handling, and data storage.
+The application follows a layered architecture. Each layer has a specific responsibility.
 
-### 5.1 Architecture Layers
+### Architecture Layers
 
-**1. API Layer — `app/api/`**
+**1. API Layer – `payment_routes.py`**
 
-The API layer exposes the payment endpoint and handles incoming HTTP requests.
+- Exposes the `/process-payment` endpoint.
+- Accepts payment request data and the `Idempotency-Key` header.
+- Delegates processing to the payment service.
+- Returns the payment response and cache-hit header.
 
-Responsibilities:
-- Receive payment requests.
-- Extract the `Idempotency-Key` header.
-- Pass request data to the Payment Service.
-- Set response headers and HTTP status codes.
-- Return the payment result to the client.
+**2. Service Layer – `payment_service.py`**
 
-The router remains thin and delegates business operations to the service layer.
+- Validates the idempotency key.
+- Prepares the payment payload.
+- Defines the payment operation.
+- Coordinates with the idempotency service.
+- Formats the cache-hit header.
 
-**2. Service Layer — `app/services/`**
+**3. Idempotency Layer – `idempotency_service.py`**
 
-The service layer contains the application's business logic.
+- Generates request fingerprints.
+- Checks whether an idempotency key already exists.
+- Detects conflicting request payloads.
+- Coordinates concurrent requests.
+- Returns cached responses.
+- Stores successful payment results.
 
-`payment_service.py`
+**4. Storage Layer – `idempotency_store.py`**
 
-Responsible for:
-- Validating the idempotency key.
-- Preparing the payment payload.
-- Defining and executing the simulated payment operation.
-- Delegating idempotency processing.
-- Formatting the cache-hit response header.
+- Maintains idempotency records in memory.
+- Provides synchronized record creation and access.
+- Tracks processing and completed states.
+- Manages expiration of completed records.
 
-`idempotency_service.py`
+**5. Exception Layer – `exceptions.py` and `exception_handlers.py`**
 
-Responsible for:
-- Generating SHA-256 request fingerprints.
-- Retrieving or creating idempotency records.
-- Comparing incoming and stored fingerprints.
-- Detecting conflicting requests.
-- Returning cached responses.
-- Coordinating concurrent requests.
-- Managing payment execution outcomes.
+- Defines application-specific exceptions.
+- Converts application exceptions into consistent HTTP responses.
+- Keeps HTTP error handling separate from business logic.
 
-**3. Core Layer — `app/core/`**
-
-The core layer contains application-level exceptions and centralized exception handling.
-
-`exceptions.py`
-
-Defines custom exceptions:
-- `InvalidIdempotencyKeyException`
-- `IdempotencyConflictException`
-
-`exception_handlers.py`
-
-Converts application exceptions into HTTP responses:
-- Invalid idempotency keys return HTTP 400.
-- Reused keys with different payloads return HTTP 409.
-
-**4. Storage Layer — `app/storage/`**
-
-The storage layer manages idempotency records using an in-memory dictionary.
-
-`idempotency_store.py`
-
-Responsible for:
-- Creating and retrieving records.
-- Maintaining record states.
-- Coordinating access with `asyncio.Lock`.
-- Storing completed payment responses.
-- Signaling waiting requests with `asyncio.Event`.
-- Removing failed records.
-- Managing completed-record expiration.
-
-**5. Application Entry Point — `app/main.py`**
-
-The application entry point:
-- Creates the FastAPI application.
-- Configures API metadata.
-- Registers centralized exception handlers.
-- Includes the payment router.
-- Manages application startup and shutdown.
-
-### 5.2 High-Level Component Architecture
+### High-Level Component Architecture
 
 ```mermaid
 flowchart TD
-    A[Client] --> B[Payment Router]
+    A[Client Application] --> B[FastAPI API Layer]
     B --> C[Payment Service]
     C --> D[Idempotency Service]
-    D --> E[In-Memory Store]
-    D --> F[Payment Operation]
-    F --> E
-    E --> D
+
+    D --> E[Request Fingerprinting]
+    D --> F[Idempotency Store]
+
+    F --> G[In-Memory Dictionary]
+    F --> H[Async Lock and Event]
+
+    D --> I[Payment Processing]
+    I --> J[Store Completed Response]
+
+    J --> F
+    F --> D
     D --> C
     C --> B
     B --> A
 
-    C -. Custom Exceptions .-> G[Centralized Exception Handlers]
-    D -. Custom Exceptions .-> G
-    G --> H[HTTP 400 / HTTP 409]
+    D --> K[Application Exceptions]
+    K --> L[Centralized Exception Handlers]
+    L --> A
 ```
 
-### 5.3 System Diagram
+### System Interaction – Sequence Diagram
 
-The sequence diagram illustrates the communication between the client, router, services, storage layer, and exception handler.
-
-It covers the main request scenarios:
-- A new payment request.
-- A repeated request with the same payload.
-- A conflicting request with a different payload.
-- Concurrent requests using the same idempotency key.
+The following sequence diagram illustrates how the gateway processes a new payment request and handles a duplicate request.
 
 ```mermaid
 sequenceDiagram
     autonumber
 
     actor Client
-    participant Router as Payment Router
+    participant API as FastAPI Router
     participant PS as Payment Service
     participant IS as Idempotency Service
     participant Store as In-Memory Store
-    participant EH as FastAPI Exception Handler
 
-    Client->>Router: POST /process-payment
-    Router->>PS: process_payment_idempotent()
+    Client->>API: POST /process-payment
+    Note over Client,API: Idempotency-Key + Payment Payload
 
-    PS->>PS: Validate Idempotency-Key
+    API->>PS: process_payment_idempotent()
+    PS->>PS: Validate Idempotency Key
+    PS->>IS: execute_idempotent()
+    IS->>IS: Generate SHA-256 Fingerprint
+    IS->>Store: get_or_create(key, fingerprint)
 
-    alt Missing or empty key
-        PS-->>EH: InvalidIdempotencyKeyException
-        EH-->>Client: HTTP 400 Bad Request
+    alt New Idempotency Key
+        Store-->>IS: New Processing Record
+        IS->>PS: Execute Payment
+        PS->>PS: Simulate Payment (2 seconds)
+        PS-->>IS: Payment Response
+        IS->>Store: complete(response, status_code)
+        Store-->>IS: Record Completed
+        IS-->>PS: Original Response
+        PS-->>API: Payment Result
+        API-->>Client: 200 OK, X-Cache-Hit: false
 
-    else Valid key
-        PS->>IS: execute_idempotent(key, payload, action)
-        IS->>IS: Generate SHA-256 fingerprint
-        IS->>Store: get_or_create(key, fingerprint)
-        Store-->>IS: Record and is_new
+    else Existing Key, Same Payload, Completed
+        Store-->>IS: Existing Completed Record
+        IS-->>PS: Cached Response
+        PS-->>API: Original Payment Result
+        API-->>Client: 200 OK, X-Cache-Hit: true
 
-        alt New idempotency key
-            IS->>PS: Execute payment callback
-            PS->>PS: Simulate payment processing
-            PS-->>IS: Payment response
-            IS->>Store: complete(key, response, status)
-            Store-->>IS: Record completed
-            IS-->>PS: Response, cache_hit=false
-            PS-->>Router: Payment result
-            Router-->>Client: HTTP 200, X-Cache-Hit=false
+    else Existing Key, Different Payload
+        Store-->>IS: Existing Record
+        IS-->>PS: Idempotency Conflict
+        PS-->>API: Raise Conflict Exception
+        API-->>Client: 409 Conflict
 
-        else Existing key with different payload
-            IS-->>EH: IdempotencyConflictException
-            EH-->>Client: HTTP 409 Conflict
-
-        else Existing key with completed status
-            IS->>Store: Retrieve cached response
-            Store-->>IS: Stored payment response
-            IS-->>PS: Cached response, cache_hit=true
-            PS-->>Router: Payment result
-            Router-->>Client: HTTP 200, X-Cache-Hit=true
-
-        else Existing key with processing status
-            IS->>IS: Wait on asyncio.Event
-            Note over IS,Store: Original request completes and signals event
-            Store-->>IS: Completion notification
-            IS-->>PS: Original payment response
-            PS-->>Router: Payment result
-            Router-->>Client: HTTP 200, X-Cache-Hit=true
-        end
+    else Existing Key, Same Payload, Processing
+        Store-->>IS: Existing Processing Record
+        IS->>IS: Wait for Completion Event
+        Store-->>IS: Payment Completed
+        IS-->>PS: Original Payment Response
+        PS-->>API: Payment Result
+        API-->>Client: 200 OK, X-Cache-Hit: true
     end
 ```
 
-The concurrent-request scenario illustrates successful completion. If the original payment operation fails, waiting requests are notified but do not receive a successful cached response.
+---
 
 ## 6. Idempotency Mechanism
 
-The idempotency mechanism is the central component of FinSafe.
-
-It ensures that repeated requests with the same key and equivalent payload reuse the original result.
-
 ### 6.1 Idempotency Key
 
-The client provides an idempotency key through the HTTP header:
+The client must include an `Idempotency-Key` in the HTTP request headers.
+
+Example:
 
 ```http
-Idempotency-Key: payment_001
+POST /process-payment
+Idempotency-Key: payment_12345
+Content-Type: application/json
 ```
 
-The key identifies a logical payment operation.
+The key identifies a particular payment attempt.
 
-The same key must be reused when retrying the same payment request.
+The gateway validates that the key is present and is not empty or whitespace-only.
 
 ### 6.2 Request Fingerprinting
 
-FinSafe uses SHA-256 to generate a fingerprint of the request payload.
+The gateway uses SHA-256 hashing to generate a fingerprint of the request payload.
 
-Before generating the hash, the payload is serialized into canonical JSON.
+Before generating the fingerprint, the payload is serialized into canonical JSON using:
 
-The serialization uses:
-
-- Sorted object keys.
-- Compact JSON separators.
-- Consistent Unicode handling.
+- Sorted dictionary keys.
+- Consistent JSON separators.
+- UTF-8-compatible character handling.
 - Rejection of non-standard JSON numeric values.
 
-This ensures that equivalent JSON objects produce the same fingerprint even if their key order differs.
+This ensures that logically equivalent JSON objects with different key orders produce the same fingerprint.
 
-### Fingerprinting Process
+Example:
 
-```mermaid
-flowchart TD
-    A[Incoming Payment Payload] --> B[Canonical JSON Serialization]
-    B --> C[SHA-256 Hash Generation]
-    C --> D[Request Fingerprint]
-    D --> E[Store Fingerprint with Idempotency Record]
+Request A:
+
+```json
+{
+    "amount": 100,
+    "currency": "GHS"
+}
 ```
 
-When another request uses the same key, its fingerprint is compared with the stored fingerprint.
+Request B:
 
-| Condition | Result |
-|---|---|
-| Same key + same fingerprint | Return or wait for the original result. |
-| Same key + different fingerprint | Return HTTP 409 Conflict. |
-| New key | Create a new idempotency record and process payment. |
+```json
+{
+    "currency": "GHS",
+    "amount": 100
+}
+```
+
+Both requests produce the same fingerprint because their data is equivalent.
 
 ### 6.3 Why Fingerprinting Is Necessary
 
-An idempotency key alone is not sufficient.
-
-For example, consider these requests:
-
-First request:
-
-```json
-{
-  "amount": 250,
-  "currency": "GHS"
-}
-```
-
-Second request:
-
-```json
-{
-  "amount": 500,
-  "currency": "GHS"
-}
-```
-
-Both requests use the same idempotency key.
-
-The payloads are different, so their fingerprints will differ.
-
-FinSafe rejects the second request rather than returning the first payment's result or processing a different payment under the same key.
-
-## 7. Concurrency Management
-
-FinSafe uses Python's asynchronous programming capabilities to coordinate simultaneous requests.
-
-Two important mechanisms are used.
-
-### 7.1 asyncio.Lock
-
-The storage layer uses `asyncio.Lock` to coordinate access to the shared in-memory dictionary.
-
-This protects critical storage operations such as:
-- Retrieving records.
-- Creating new records.
-- Updating record states.
-- Removing records.
-- Cleaning up expired records.
-
-It ensures that operations on the shared store are coordinated within the application process.
-
-### 7.2 asyncio.Event
-
-The system uses `asyncio.Event` to coordinate requests that arrive while an existing payment is still processing.
+An idempotency key alone is insufficient.
 
 For example:
 
-- Request A arrives with a new key.
-- Request A creates a record with status `processing`.
-- Request B arrives using the same key and payload.
-- Request B finds the existing processing record.
-- Request B waits on the record's event.
-- Request A completes payment processing.
-- The storage layer updates the record and signals the event.
-- Request B wakes up and retrieves the completed response.
+- Request A uses key `payment_12345` with amount `100`.
+- Request B uses the same key with amount `500`.
 
-This prevents Request B from executing the same payment operation again.
+The gateway must not return the previous response or execute a different payment under the same key.
 
-### 7.3 Concurrent Request Handling
+By comparing fingerprints, the gateway identifies whether the same key is being reused with a different request payload.
+
+### Fingerprinting Flow
 
 ```mermaid
 flowchart TD
-    A[Request A arrives] --> B[Create idempotency record]
-    B --> C[Set status: Processing]
-    C --> D[Execute payment]
-    D --> E[Store payment response]
-    E --> F[Set status: Completed]
-    F --> G[Signal waiting requests]
-    G --> H[Return payment response]
+    A[Receive Payment Payload] --> B[Convert to Canonical JSON]
+    B --> C[Generate SHA-256 Fingerprint]
+    C --> D[Compare with Stored Fingerprint]
 
-    I[Request B arrives] --> J[Find existing key]
-    J --> K[Check record status]
-    K --> L[Wait on asyncio.Event]
-    L --> M[Receive completion notification]
-    M --> N[Return cached response]
+    D --> E{Fingerprint Matches?}
+
+    E -->|Yes| F[Continue Idempotency Check]
+    E -->|No| G[Raise 409 Conflict]
 ```
 
-This coordination is process-local. It does not provide distributed locking across separate application instances.
+---
+
+## 7. Concurrency Management
+
+A major requirement of the gateway is to handle multiple identical requests arriving at approximately the same time.
+
+Without proper synchronization, two requests could both check the store, find no existing record, and start processing the same payment.
+
+This is a race condition.
+
+The gateway addresses this using Python's asynchronous synchronization primitives.
+
+### 7.1 asyncio.Lock
+
+The in-memory store uses `asyncio.Lock` to synchronize access to shared records.
+
+It protects the record creation and lookup operation so that simultaneous requests using the same key cannot independently create separate processing records.
+
+### 7.2 asyncio.Event
+
+Each processing record has an asynchronous event.
+
+When a second identical request arrives while the first request is still processing:
+
+1. The second request finds the existing processing record.
+2. It waits on the record's event.
+3. The first request completes payment processing.
+4. The first request stores the response.
+5. The completion event is signalled.
+6. The waiting request resumes.
+7. The second request receives the original response.
+
+The waiting request does not start another payment operation.
+
+### Concurrent Request Flow
+
+```mermaid
+flowchart TD
+    A[Request A Arrives] --> B[Create Processing Record]
+    B --> C[Start Payment Processing]
+
+    D[Request B Arrives] --> E[Check Existing Key]
+    E --> F[Find Processing Record]
+    F --> G[Wait on asyncio.Event]
+
+    C --> H[Payment Completes]
+    H --> I[Store Original Response]
+    I --> J[Signal Completion Event]
+
+    J --> G
+    G --> K[Return Original Response]
+```
+
+### Concurrency Outcome
+
+| Request | Behaviour |
+|---|---|
+| First request | Starts payment processing |
+| Second identical request while processing | Waits for the first request |
+| Second request after completion | Receives cached response |
+| Same key with a different payload | Receives 409 Conflict |
+
+---
 
 ## 8. Idempotency Record Management
 
-Each idempotency record stores the information needed to identify a request and reproduce its completed response.
+Each idempotency record maintains information about a payment request.
 
-The record includes:
+### Record Fields
 
 | Field | Description |
 |---|---|
-| `key` | Unique idempotency key supplied by the client. |
-| `fingerprint` | SHA-256 hash of the request payload. |
-| `status` | Current processing state. |
-| `response_body` | Stored payment response. |
-| `status_code` | HTTP status code associated with the stored response. |
-| `event` | Asynchronous event used to notify waiting requests. |
-| `created_at` | Time when the record was created. |
-| `completed_at` | Time when payment processing completed. |
+| `key` | Client-provided idempotency key |
+| `fingerprint` | SHA-256 fingerprint of the request payload |
+| `status` | Current processing state |
+| `response_body` | Stored payment response |
+| `status_code` | Original HTTP response status code |
+| `event` | Async event used to coordinate waiting requests |
+| `created_at` | Time the record was created |
+| `completed_at` | Time the payment operation completed |
 
-### 8.1 Record States
+### Record States
 
-The record uses three states:
+The records move through the following states:
 
-| State | Description |
-|---|---|
-| `processing` | The payment operation is currently executing. |
-| `completed` | The payment operation succeeded and its response was stored. |
-| `failed` | The payment operation failed before the record was removed. |
+- `processing`: Payment processing has started.
+- `completed`: Payment processing succeeded and the response has been stored.
+- `failed`: Payment processing failed.
 
-### 8.2 Record Lifecycle
+### Record Lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Processing
+    [*] --> Processing: New key created
 
     Processing --> Completed: Payment succeeds
     Processing --> Failed: Payment fails
 
     Failed --> [*]: Failed record removed
 
-    Completed --> Expired: 24-hour TTL reached
-    Expired --> [*]: Expired record removed
+    Completed --> Completed: Cached response replayed
+    Completed --> [*]: TTL expiration
 ```
 
-Processing records are not removed by TTL cleanup.
-
-Failed records are removed so that a subsequent request can retry using the same key.
+---
 
 ## 9. Response Caching and Replay
 
-When a payment is successfully processed, the response body and status code are stored in the idempotency record.
+Once a payment has been successfully processed, the gateway stores its response and HTTP status code.
 
-For subsequent requests using the same key and payload, the system returns the stored response.
+When an identical request is received again using the same key, the gateway returns the stored response.
 
-This means:
-- The payment operation is not executed again.
-- The original transaction ID is preserved.
-- The original response body is returned.
-- The response is identified as a cache hit.
+The payment processing function is not executed again.
 
-FinSafe exposes this behavior through the `X-Cache-Hit` response header.
+The gateway also includes an `X-Cache-Hit` response header.
 
-| Header Value | Meaning |
-|---|---|
-| `false` | A new payment operation was executed. |
-| `true` | A previously completed response was returned. |
-
-Example:
-
-First request:
-
-```http
-X-Cache-Hit: false
-```
-
-Repeated request:
-
-```http
-X-Cache-Hit: true
-```
-
-## 10. Idempotency Key Expiration
-
-FinSafe implements a 24-hour time-to-live (TTL) for completed idempotency records.
-
-The TTL is configured as:
-
-```python
-ttl_seconds = 86400
-```
-
-The expiration period starts when the payment operation completes.
-
-### Expiration Rules
-
-- Completed records expire after 86,400 seconds.
-- Processing records are not expired by TTL cleanup.
-- Failed records are removed to allow retries.
-- Expired records can be replaced when the same key is submitted again.
-- Expiration is checked when a key is accessed or when `cleanup_expired()` is explicitly called.
-
-The current implementation does not use a background cleanup scheduler.
-
-This means expiration cleanup is lazy rather than continuously scheduled.
-
-## 11. Exception Handling
-
-FinSafe uses custom application exceptions and centralized FastAPI exception handlers.
-
-This separates business-level error detection from HTTP response construction.
-
-### 11.1 Custom Exceptions
-
-`InvalidIdempotencyKeyException`
-
-Raised when the `Idempotency-Key` header is missing or contains only whitespace.
-
-Expected HTTP response:
-
-`400 Bad Request`
-
-`IdempotencyConflictException`
-
-Raised when an existing idempotency key is reused with a different request payload.
-
-Expected HTTP response:
-
-`409 Conflict`
-
-### 11.2 Centralized Exception Handling
-
-The exception handlers are defined in:
-
-`app/core/exception_handlers.py`
-
-They are registered in:
-
-`app/main.py`
-
-The service layer raises the relevant application exception, and FastAPI dispatches it to the registered handler.
-
-This avoids repeating HTTP exception translation in individual routes.
-
-### 11.3 Exception Handling Responsibilities
-
-| Component | Responsibility |
-|---|---|
-| `exceptions.py` | Defines custom application exceptions. |
-| `exception_handlers.py` | Converts custom exceptions into HTTP responses. |
-| `main.py` | Registers the handlers with FastAPI. |
-| Service layer | Raises exceptions when business rules are violated. |
-
-## 12. API Documentation
-
-### Base URL
-
-Local development:
-
-`http://127.0.0.1:8000`
-
-Deployed application:
-
-`https://finset-dfkmdtwri-divine8.vercel.app`
-
-### Interactive Documentation
-
-Swagger UI:
-
-https://finset-dfkmdtwri-divine8.vercel.app/docs
-
-ReDoc:
-
-https://finset-dfkmdtwri-divine8.vercel.app/redoc
-
-### Endpoint
-
-**Process Payment**
+### First Request
 
 ```http
 POST /process-payment
+Idempotency-Key: payment_12345
+Content-Type: application/json
 ```
+
+Request body:
+
+```json
+{
+    "amount": 100,
+    "currency": "GHS"
+}
+```
+
+Example response:
+
+```http
+HTTP/1.1 200 OK
+X-Cache-Hit: false
+```
+
+```json
+{
+    "message": "Charged 100 GHS",
+    "amount": 100,
+    "currency": "GHS",
+    "transaction_id": "tx_1234567890",
+    "status": "SUCCESS"
+}
+```
+
+### Duplicate Request
+
+The client sends the same request again with the same key and payload.
+
+Example response:
+
+```http
+HTTP/1.1 200 OK
+X-Cache-Hit: true
+```
+
+The response body and status code are replayed from the stored successful result.
+
+The transaction ID remains the same because the original payment is not executed again.
+
+---
+
+## 10. Idempotency Key Expiration
+
+### Developer's Choice: 24-Hour Time-to-Live (TTL)
+
+An additional safety mechanism implemented in this project is the expiration of completed idempotency records.
+
+Completed records are retained for 24 hours.
+
+This provides a defined retry window while preventing completed records from remaining in memory indefinitely.
+
+### How It Works
+
+- The TTL is set to 86,400 seconds (24 hours).
+- The expiration period starts when payment processing completes.
+- Completed records are eligible for removal after the TTL expires.
+- Processing records are not removed by completed-record expiration.
+- Expiration is checked lazily when records are accessed.
+- An explicit cleanup method is also available to remove expired records.
+
+### Why This Feature Was Added
+
+In a payment-processing system, idempotency records should not remain in storage forever.
+
+Keeping completed records indefinitely can cause unnecessary memory consumption.
+
+A 24-hour retention period provides a practical retry window while allowing expired records to be removed.
+
+### Important Limitation
+
+The current implementation uses in-memory storage. Expired records are removed through lazy expiration and the explicit cleanup method; there is no background cleanup scheduler.
+
+---
+
+## 11. Exception Handling
+
+The application uses centralized exception handling to separate business logic from HTTP response formatting.
+
+Custom application exceptions are defined in:
+
+`app/core/exceptions.py`
+
+HTTP exception handlers are defined in:
+
+`app/core/exception_handlers.py`
+
+The handlers are registered in:
+
+`app/main.py`
+
+### Custom Exceptions
+
+| Exception | HTTP Status | Description |
+|---|---:|---|
+| `InvalidIdempotencyKeyException` | 400 | Missing or invalid idempotency key |
+| `IdempotencyConflictException` | 409 | Same key used with a different request payload |
+
+### Error Response Example
+
+```json
+{
+    "detail": "Idempotency key already used for a different request body."
+}
+```
+
+This approach keeps routes clean and allows the services to focus on business operations.
+
+---
+
+## 12. API Documentation
+
+The application exposes a REST API endpoint for payment processing.
+
+### Endpoint
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/process-payment` | Processes a payment with idempotency protection |
 
 ### Request Headers
 
 | Header | Required | Description |
 |---|---|---|
-| `Idempotency-Key` | Yes | Unique identifier for the payment request. |
-| `Content-Type` | Yes | Specifies JSON request content. |
-
-Example:
-
-```http
-Idempotency-Key: payment_001
-Content-Type: application/json
-```
+| `Idempotency-Key` | Yes | Unique identifier for a payment attempt |
+| `Content-Type` | Yes | Must be `application/json` |
 
 ### Request Body
 
 ```json
 {
-  "amount": 250,
-  "currency": "GHS"
+    "amount": 100,
+    "currency": "GHS"
 }
 ```
 
 ### Successful Response
 
-HTTP Status: `200 OK`
+HTTP status: `200 OK`
 
 ```json
 {
-  "message": "Charged 250 GHS",
-  "amount": 250.0,
-  "currency": "GHS",
-  "transaction_id": "tx_a1b2c3d4e5",
-  "status": "SUCCESS"
+    "message": "Charged 100 GHS",
+    "amount": 100,
+    "currency": "GHS",
+    "transaction_id": "tx_1234567890",
+    "status": "SUCCESS"
 }
 ```
 
-The transaction ID is generated dynamically for each newly processed payment.
+### Response Headers
 
-### Error Responses
-
-**Missing or invalid idempotency key**
-
-HTTP Status: `400 Bad Request`
-
-```json
-{
-  "detail": "Header 'Idempotency-Key' is missing or invalid."
-}
-```
-
-**Idempotency conflict**
-
-HTTP Status: `409 Conflict`
-
-```json
-{
-  "detail": "Idempotency key already used for a different request body."
-}
-```
-
-**Invalid request body**
-
-HTTP Status: `422 Unprocessable Entity`
-
-FastAPI and Pydantic return validation details when the request body does not satisfy the payment schema.
+| Header | Meaning |
+|---|---|
+| `X-Cache-Hit: false` | New payment was processed |
+| `X-Cache-Hit: true` | Previously completed response was replayed |
 
 ### HTTP Status Codes
 
 | Status Code | Description |
-|---|---|
-| 200 | Payment successfully processed or cached response returned. |
-| 400 | Missing or invalid idempotency key. |
-| 409 | Idempotency key reused with a different payload. |
-| 422 | Request validation failed. |
-| 500 | Unexpected server-side error. |
+|---:|---|
+| 200 | Payment processed successfully or cached response returned |
+| 400 | Missing or invalid idempotency key |
+| 409 | Idempotency key reused with a different payload |
+| 422 | Request body failed validation |
+
+### Testing Through Swagger UI
+
+FastAPI automatically generates interactive API documentation.
+
+After starting the application, open:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+To test idempotency:
+
+1. Open the `POST /process-payment` endpoint.
+2. Click **Try it out**.
+3. Enter the payment request body.
+4. Provide an `Idempotency-Key`.
+5. Execute the request.
+6. Execute the same request again using the same key.
+7. Compare the response bodies and `X-Cache-Hit` headers.
+
+The first request should return `X-Cache-Hit: false`, while the duplicate should return `X-Cache-Hit: true`.
+
+---
 
 ## 13. Project Structure
 
@@ -647,7 +620,6 @@ FastAPI and Pydantic return validation details when the request body does not sa
 Idempotency-gateway/
 │
 ├── app/
-│   │
 │   ├── api/
 │   │   ├── __init__.py
 │   │   └── payment_routes.py
@@ -684,63 +656,89 @@ Idempotency-gateway/
 └── README.md
 ```
 
+---
+
 ## 14. Installation and Setup
 
 ### Prerequisites
 
-- Python 3.10 or later.
-- pip.
-- Git.
+Make sure you have:
 
-### Clone the Repository
+- Python 3.10 or later.
+- Git.
+- pip.
+
+### Step 1: Clone the Repository
 
 ```bash
 git clone https://github.com/iirasubizadivine/finsafe-idempotency-gateway.git
 ```
 
-Navigate into the project directory:
+### Step 2: Navigate to the Backend Project
 
 ```bash
-cd Idempotency-gateway
+cd finsafe-idempotency-gateway/backend/Idempotency-gateway
 ```
 
-### Create a Virtual Environment
+### Step 3: Create a Virtual Environment
 
 ```bash
 python3.10 -m venv venv
 ```
 
-Activate the environment on Linux or macOS:
+### Step 4: Activate the Virtual Environment
+
+Linux/macOS:
 
 ```bash
 source venv/bin/activate
 ```
 
-### Install Dependencies
+Windows:
+
+```bash
+venv\Scripts\activate
+```
+
+### Step 5: Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
+---
+
 ## 15. Running the Application
 
-Start the FastAPI development server:
+Start the FastAPI application using Uvicorn:
 
 ```bash
-python3.10 -m uvicorn app.main:app --reload
+uvicorn app.main:app --reload
 ```
 
-The application will be available at:
+The API will be available at:
 
-`http://127.0.0.1:8000`
+```text
+http://127.0.0.1:8000
+```
 
-Open the interactive API documentation:
+Interactive API documentation:
 
-`http://127.0.0.1:8000/docs`
+```text
+http://127.0.0.1:8000/docs
+```
+
+Alternative API documentation:
+
+```text
+http://127.0.0.1:8000/redoc
+```
+
+---
 
 ## 16. Testing
 
-FinSafe uses pytest, pytest-asyncio, and HTTPX for automated testing.
+The project uses pytest, pytest-asyncio, and HTTPX for automated testing.
 
 Run the complete test suite:
 
@@ -748,111 +746,135 @@ Run the complete test suite:
 python3.10 -m pytest -v
 ```
 
-### Test Coverage
+### Test Coverage Areas
 
 | Test File | Purpose |
 |---|---|
-| `test_payment.py` | Payment processing, missing headers, invalid amounts, and currency validation. |
-| `test_idempotency.py` | Duplicate requests, cached responses, conflicting payloads, and different keys. |
-| `test_concurrancy.py` | Concurrent request handling and duplicate execution prevention. |
-| `test_idempotency_expiration.py` | Completed-record expiration and processing-record cleanup behavior. |
+| `test_payment.py` | Payment processing and request validation |
+| `test_idempotency.py` | Duplicate requests, response replay, and conflicting payloads |
+| `test_concurrancy.py` | Simultaneous requests and concurrency behaviour |
+| `test_idempotency_expiration.py` | Expiration and cleanup of idempotency records |
 
-### Important Test Scenarios
+### Important Scenarios Tested
 
-The test suite covers:
+- Successful first payment request.
+- Duplicate request with the same key and payload.
+- Reuse of an idempotency key with a different payload.
+- Missing idempotency key.
+- Empty or whitespace-only idempotency key.
+- Different keys processing separate payments.
+- Equivalent JSON payloads with different key ordering.
+- Simultaneous requests using the same key.
+- Expiration of completed records.
+- Protection of processing records during expiration cleanup.
 
-1. Successful payment processing.
-2. Repeated requests returning the cached response.
-3. Reusing a key with a different payload.
-4. Requests with different JSON object key ordering.
-5. Separate payment operations using different keys.
-6. Missing idempotency keys.
-7. Empty or whitespace-only idempotency keys.
-8. Invalid payment amounts.
-9. Invalid currency formats.
-10. Currency normalization.
-11. Concurrent requests using the same idempotency key.
-12. Expiration of completed records.
-13. Protection of processing records from TTL cleanup.
+---
 
 ## 17. Deployment
 
-FinSafe is deployed using Vercel.
+The application has been deployed using Vercel.
 
-**Production URL**
+Deployment URL:
 
 https://finset-dfkmdtwri-divine8.vercel.app
 
-**Swagger Documentation**
+Interactive API documentation:
 
 https://finset-dfkmdtwri-divine8.vercel.app/docs
 
-### Deployment Considerations
+The deployed API can be tested using the same endpoint and request format described in the API Documentation section.
 
-The current implementation uses a process-local in-memory dictionary.
-
-This has important implications:
-
-- Records are stored in application memory.
-- Records are lost when the application process restarts.
-- Separate serverless instances do not share the same records.
-- Separate workers do not share the same in-memory state.
-- The implementation does not provide distributed idempotency guarantees.
-
-For a production system operating across multiple instances, a shared storage solution such as Redis or a transactional database would be required.
+---
 
 ## 18. Design Decisions and Trade-offs
 
-| Design Decision | Reason |
-|---|---|
-| SHA-256 fingerprinting | Identifies equivalent request payloads. |
-| Canonical JSON serialization | Prevents JSON key ordering from changing the fingerprint. |
-| `asyncio.Lock` | Coordinates access to shared in-memory storage. |
-| `asyncio.Event` | Allows matching concurrent requests to wait for payment completion. |
-| 24-hour TTL | Defines the retention period for completed idempotency records. |
-| Centralized exception handlers | Separates HTTP error responses from business logic. |
-| In-memory storage | Keeps the implementation simple without external infrastructure. |
+### 18.1 In-Memory Storage
+
+The project uses a native Python dictionary as its idempotency store.
+
+This was selected because the challenge permits an in-memory storage solution and it keeps the implementation simple.
+
+**Advantages:**
+
+- Simple implementation.
+- Fast access to records.
+- No external database dependency.
+- Suitable for demonstrating idempotency and asynchronous concurrency concepts.
+
+**Limitations:**
+
+- Records are lost when the application process restarts.
+- Records are not shared across separate application processes or serverless instances.
+- It is not suitable as-is for production payment infrastructure.
+
+### 18.2 Asynchronous Processing
+
+FastAPI and asyncio allow the application to handle waiting requests without blocking the entire event loop.
+
+The payment operation is simulated using an asynchronous delay to demonstrate how the gateway handles requests while processing is in progress.
+
+### 18.3 SHA-256 Fingerprinting
+
+SHA-256 provides a consistent way to compare request payloads.
+
+It prevents the gateway from treating two different payment requests as the same operation merely because they use the same idempotency key.
+
+### 18.4 Centralized Exception Handling
+
+Application exceptions are separated from HTTP response handling.
+
+This makes the application easier to maintain and keeps HTTP-specific logic out of the service layer.
+
+### 18.5 Response Replay
+
+The gateway stores the original successful response and status code so that duplicate requests receive the same result without executing payment processing again.
+
+### 18.6 Production Considerations
+
+This implementation demonstrates idempotency within a single running application process. It does not provide distributed, cross-instance exactly-once payment execution.
+
+A production payment gateway would require additional safeguards, such as:
+
+- Durable shared storage.
+- Atomic operations across multiple application instances.
+- Database transactions and unique constraints.
+- Distributed locking or equivalent coordination where appropriate.
+- Integration with a real payment provider.
+- Provider-side idempotency support.
+- Recovery mechanisms for interrupted transactions.
+
+The current implementation is an educational demonstration of the core idempotency protocol, not a production-ready financial transaction processor.
+
+---
+
+## 19. Future Improvements
+
+Possible future improvements include:
+
+1. Replace in-memory storage with Redis or a relational database.
+2. Add persistent idempotency records that survive application restarts.
+3. Introduce distributed concurrency control for multiple application instances.
+4. Add structured logging and monitoring.
+5. Integrate with a real payment provider.
+6. Add transaction recovery and reconciliation mechanisms.
+7. Implement configurable idempotency retention policies.
+
+---
+
+## 20. Conclusion
+
+FinSafe Idempotency Gateway demonstrates how an idempotency layer can protect payment APIs against duplicate transaction attempts.
+
+The project combines request fingerprinting, synchronized record creation, asynchronous concurrency coordination, response caching, and expiration to provide a structured approach to handling repeated payment requests.
+
+It demonstrates practical backend engineering concepts, including API design, separation of concerns, asynchronous programming, concurrency control, exception handling, and automated testing.
+
+**The goal is simple: one payment attempt should not result in multiple payment executions just because a client retries its request.**
+
+---
 
 ## License
 
 This project is licensed under the MIT License.
+
 See the [LICENSE](LICENSE) file for details.
-
-### Current Limitations
-
-FinSafe is a demonstration implementation of an idempotency gateway, not a fully distributed production payment system.
-
-Current limitations include:
-
-- No persistent database.
-- No Redis or distributed locking.
-- No integration with an actual payment provider.
-- No shared idempotency state across multiple serverless instances.
-- No background expiration scheduler.
-- No authentication or authorization layer.
-- No payment-provider reconciliation mechanism.
-
-## 19. Future Improvements
-
-Potential improvements include:
-
-1. Introduce Redis or a persistent database for shared idempotency records.
-2. Implement distributed locking for multiple application instances.
-3. Integrate with a real payment provider.
-4. Introduce durable payment execution and recovery mechanisms.
-5. Add authentication and authorization.
-6. Add structured logging, monitoring, and metrics.
-7. Implement scheduled expiration cleanup.
-8. Expand integration testing for failure recovery and distributed concurrency.
-
-## 20. Conclusion
-
-FinSafe demonstrates how an idempotency layer can protect payment APIs against duplicate execution caused by retries and concurrent requests.
-
-By combining SHA-256 request fingerprinting, asynchronous concurrency coordination, response caching, record expiration, and centralized exception handling, the gateway provides a structured approach to safe payment request processing.
-
-The project also demonstrates practical backend engineering concepts, including layered architecture, asynchronous programming, API validation, concurrency management, and automated testing using Python and FastAPI.
-
----
-
-**FinSafe Idempotency Gateway — The "Pay-Once" Protocol.**
