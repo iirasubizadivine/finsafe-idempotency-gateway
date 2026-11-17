@@ -695,7 +695,7 @@ Idempotency-gateway/
 ### Clone the Repository
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
+git clone https://github.com/iirasubizadivine/finsafe-idempotency-gateway.git
 ```
 
 Navigate into the project directory:
