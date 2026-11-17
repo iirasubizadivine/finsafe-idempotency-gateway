@@ -813,6 +813,11 @@ For a production system operating across multiple instances, a shared storage so
 | Centralized exception handlers | Separates HTTP error responses from business logic. |
 | In-memory storage | Keeps the implementation simple without external infrastructure. |
 
+## License
+
+This project is licensed under the MIT License.
+See the [LICENSE](LICENSE) file for details.
+
 ### Current Limitations
 
 FinSafe is a demonstration implementation of an idempotency gateway, not a fully distributed production payment system.
