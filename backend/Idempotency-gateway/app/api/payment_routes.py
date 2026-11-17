@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Header, HTTPException, status, Response
+
+from fastapi import APIRouter, Header, status, Response
 
 from app.schemas.payment import (
     PaymentRequest,
     PaymentResponse,
     ErrorResponse,
 )
-from app.services import payment_service, idempotency_service
-from app.core.exceptions import IdempotencyConflictException
+
+from app.services import payment_service
 
 
 router = APIRouter(tags=["Payments"])
@@ -39,50 +40,18 @@ async def process_payment(
         examples=["req_unique_key_001"],
     ),
 ):
-    # 1. Validate the idempotency key
-    if idempotency_key is None or not idempotency_key.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Header 'Idempotency-Key' is required and cannot be empty.",
+
+    result_body, result_status, is_cache_hit = (
+        await payment_service.process_payment_idempotent(
+            payment_data=payment_data,
+            idempotency_key=idempotency_key,
         )
+    )
 
-    key = idempotency_key.strip()
-    payload = payment_data.model_dump()
+    response.headers["X-Cache-Hit"] = (
+        payment_service.get_cache_hit_header(is_cache_hit)
+    )
 
-    # 2. Define the payment operation
-    async def execute_payment():
-        payment_result = await payment_service.process_payment(
-            amount=payment_data.amount,
-            currency=payment_data.currency,
-        )
+    response.status_code = result_status
 
-        result = payment_result.model_dump()
-        # Ensure amount is float for JSON serialization
-        result["amount"] = float(result["amount"])
-
-        return result, status.HTTP_200_OK
-
-    # 3. Execute with idempotency protection
-    try:
-        result_body, result_status, is_cache_hit = (
-            await idempotency_service.execute_idempotent(
-                key=key,
-                payload=payload,
-                action=execute_payment,
-            )
-        )
-
-        # 4. Indicate whether the response was cached
-        response.headers["X-Cache-Hit"] = (
-            "true" if is_cache_hit else "false"
-        )
-
-        response.status_code = result_status
-
-        return result_body
-
-    except IdempotencyConflictException as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=exc.message,
-        ) from exc
+    return result_body

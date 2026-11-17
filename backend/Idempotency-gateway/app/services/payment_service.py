@@ -1,9 +1,14 @@
+
 import asyncio
 import uuid
 import logging
 
-from app.schemas.payment import PaymentResponse
+from typing import Any, Dict, Tuple
 
+from app.schemas.payment import PaymentRequest, PaymentResponse
+from app.services.idempotency_service import idempotency_service
+
+from app.core.exceptions import InvalidIdempotencyKeyException
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +42,45 @@ class PaymentService:
             transaction_id=transaction_id,
             status="SUCCESS"
         )
+
+    async def process_payment_idempotent(
+        self,
+        payment_data: PaymentRequest,
+        idempotency_key: str | None
+    ) -> Tuple[Dict[str, Any], int, bool]:
+
+        # Validate the idempotency key.
+        if idempotency_key is None or not idempotency_key.strip():
+            raise InvalidIdempotencyKeyException()
+
+        key = idempotency_key.strip()
+
+        # Prepare the payload for fingerprinting.
+        payload = payment_data.model_dump()
+
+        # Define the payment operation.
+        async def execute_payment():
+
+            payment_result = await self.process_payment(
+                amount=payment_data.amount,
+                currency=payment_data.currency,
+            )
+
+            result = payment_result.model_dump()
+            result["amount"] = float(result["amount"])
+
+            return result, 200
+
+        # Delegate idempotency handling.
+        return await idempotency_service.execute_idempotent(
+            key=key,
+            payload=payload,
+            action=execute_payment,
+        )
+
+    @staticmethod
+    def get_cache_hit_header(is_cache_hit: bool) -> str:
+        return str(is_cache_hit).lower()
 
 
 payment_service = PaymentService()

@@ -6,7 +6,8 @@ from typing import Any, Dict, Tuple, Callable, Awaitable
 
 from app.storage.idempotency_store import (
     generate_fingerprint,
-    IdempotencyRecord
+    IdempotencyRecord,
+    idempotency_store,
 )
 
 from app.core.exceptions import IdempotencyConflictException
@@ -46,7 +47,6 @@ class IdempotencyService:
             fingerprint=fingerprint
         )
 
-        # Existing key: check whether the request is identical.
         if not is_new:
 
             if _get_record_attr(record, "fingerprint") != fingerprint:
@@ -57,7 +57,6 @@ class IdempotencyService:
 
                 raise IdempotencyConflictException()
 
-            # Completed payment: replay the original response.
             if _get_record_attr(record, "status") == "completed":
 
                 logger.info(
@@ -70,7 +69,6 @@ class IdempotencyService:
                     True
                 )
 
-            # Payment still processing: wait for the first request.
             if _get_record_attr(record, "status") == "processing":
 
                 if hasattr(record, "event"):
@@ -98,7 +96,6 @@ class IdempotencyService:
                 f"{_get_record_attr(record, 'status')}"
             )
 
-        # New key: execute the payment.
         try:
 
             logger.info(
@@ -126,3 +123,9 @@ class IdempotencyService:
             )
 
             raise
+
+
+# Create one shared IdempotencyService instance.
+idempotency_service = IdempotencyService(
+    store=idempotency_store
+)
