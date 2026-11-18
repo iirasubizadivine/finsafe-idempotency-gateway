@@ -1,21 +1,13 @@
-
 import logging
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 
 from app.api.payment_routes import router as payment_router
-
-from app.core.exceptions import (
-    InvalidIdempotencyKeyException,
-    IdempotencyConflictException,
-)
-
+from app.core.exceptions import InvalidIdempotencyKeyException, IdempotencyConflictException
 from app.core.exception_handlers import (
     invalid_idempotency_key_handler,
     idempotency_conflict_handler,
 )
-
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,16 +33,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
-app.add_exception_handler(
-    InvalidIdempotencyKeyException,
-    invalid_idempotency_key_handler,
-)
-
-app.add_exception_handler(
-    IdempotencyConflictException,
-    idempotency_conflict_handler,
-)
-
-
+app.add_exception_handler(InvalidIdempotencyKeyException, invalid_idempotency_key_handler)
+app.add_exception_handler(IdempotencyConflictException, idempotency_conflict_handler)
 app.include_router(payment_router)

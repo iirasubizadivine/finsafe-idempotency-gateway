@@ -1,74 +1,22 @@
-import re
-
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class PaymentRequest(BaseModel):
-    amount: float = Field(
-        ...,
-        gt=0,
-        description="The payment amount (must be greater than 0)",
-        examples=[100.00],
-    )
-
-    currency: str = Field(
-        ...,
-        min_length=3,
-        max_length=3,
-        description="3-letter ISO currency code (e.g. RWF, USD)",
-        examples=["RWF"],
-    )
-
-    @field_validator("currency", mode="before")
-    @classmethod
-    def validate_currency(cls, value: str) -> str:
-        if not isinstance(value, str):
-            raise ValueError("Currency must be a string.")
-
-        value = value.upper().strip()
-
-        if not re.fullmatch(r"[A-Z]{3}", value):
-            raise ValueError(
-                "Currency must contain exactly three letters."
-            )
-
-        return value
+    amount: float = Field(..., gt=0, description="The payment amount (must be greater than 0)", examples=[100.00])
+    currency: str = Field(..., min_length=3, max_length=3, description="3-letter ISO currency code (e.g. RWF, USD)", examples=["RWF"])
 
     model_config = {
-        "json_schema_extra": {
-            "example": {
-                "amount": 100.00,
-                "currency": "RWF",
-            }
-        }
+        "json_schema_extra": {"example": {"amount": 100.00, "currency": "RWF"}}
     }
 
 
 class PaymentResponse(BaseModel):
-    message: str = Field(
-        ...,
-        description="Human-readable status message",
-        examples=["Charged 100 RWF"],
-    )
-
+    message: str = Field(..., description="Human-readable status message", examples=["Charged 100 RWF"])
     amount: float = Field(..., examples=[100.00])
     currency: str = Field(..., examples=["RWF"])
-
-    transaction_id: str = Field(
-        ...,
-        description="Unique payment transaction ID",
-        examples=["tx_abc12345"],
-    )
-
-    status: str = Field(
-        ...,
-        description="Transaction status",
-        examples=["SUCCESS"],
-    )
+    transaction_id: str = Field(..., description="Unique payment transaction ID", examples=["tx_abc12345"])
+    status: str = Field(..., description="Transaction status", examples=["SUCCESS"])
 
 
 class ErrorResponse(BaseModel):
-    detail: str = Field(
-        ...,
-        description="Error message explaining the failure",
-    )
+    detail: str = Field(..., description="Error message explaining the failure")

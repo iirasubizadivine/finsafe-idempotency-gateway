@@ -1,4 +1,3 @@
-
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -14,9 +13,7 @@ async def invalid_idempotency_key_handler(
 ):
     return JSONResponse(
         status_code=400,
-        content={
-            "detail": exc.message
-        },
+        content={"detail": exc.message},
     )
 
 
@@ -26,7 +23,5 @@ async def idempotency_conflict_handler(
 ):
     return JSONResponse(
         status_code=409,
-        content={
-            "detail": exc.message
-        },
+        content={"detail": exc.message},
     )
